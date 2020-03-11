@@ -1,0 +1,163 @@
+- hosts: localhost
+  gather_facts: False
+  vars_files:
+    - config.yml
+  vars:
+    instance_type: t2.micro
+    image: ami-0a887e401f7654935
+
+  tasks:
+    - name: create a new ec2 key pair, returns generated private key
+      ec2_key:
+        name: my_keypair
+        aws_access_key: "{{ AWS_ACCESS_KEY_ID }}"
+        aws_secret_key: "{{ AWS_SECRET_ACCESS_KEY }}"
+        ec2_region: "{{ AWS_REGION }}"
+      register: my_keypair_result
+    - debug:
+        var: my_keypair_result
+ 
+    - name: Save private key
+      copy: 
+        content: "{{ my_keypair_result.key.private_key }}"
+        dest: "/home/cloud_user/ansible/my_keypair.pem"
+        mode: '0600'
+      when: my_keypair_result.changed
+
+    - name: create a VPC with shared tenancy and a couple of tags
+      ec2_vpc_net:
+        name: my_vpc
+        cidr_block: 20.0.0.0/16
+        aws_access_key: "{{ AWS_ACCESS_KEY_ID }}"
+        aws_secret_key: "{{ AWS_SECRET_ACCESS_KEY }}"
+        region: "{{ AWS_REGION }}"
+        tags:
+          module: ec2_vpc_net
+          this: works
+        tenancy: default
+      register: my_vpc_result
+    - debug:
+        var: my_vpc_result
+
+    - name: Create subnet for 1a AZ
+      ec2_vpc_subnet:
+        aws_access_key: "{{ AWS_ACCESS_KEY_ID }}"
+        aws_secret_key: "{{ AWS_SECRET_ACCESS_KEY }}"
+        region: "{{ AWS_REGION }}"
+        az: us-east-1a
+        state: present
+        vpc_id: "{{ my_vpc_result.vpc.id }}"
+        cidr: 20.0.1.0/25
+        tags:
+          Name: subnet_1a
+      register: subnet_1a_result
+    - debug:
+        var: subnet_1a_result
+
+    - name: Create subnet for 1b AZ
+      ec2_vpc_subnet:
+        aws_access_key: "{{ AWS_ACCESS_KEY_ID }}"
+        aws_secret_key: "{{ AWS_SECRET_ACCESS_KEY }}"
+        region: "{{ AWS_REGION }}"
+        az: us-east-1b
+        state: present
+        vpc_id: "{{ my_vpc_result.vpc.id }}"
+        cidr: 20.0.2.0/25
+        tags:
+          Name: subnet_1b
+      register: subnet_1b_result
+    - debug:
+        var: subnet_1b_result
+
+    - name: Create Internet gateway
+      ec2_vpc_igw:
+        aws_access_key: "{{ AWS_ACCESS_KEY_ID }}"
+        aws_secret_key: "{{ AWS_SECRET_ACCESS_KEY }}"
+        region: "{{ AWS_REGION }}"
+        vpc_id: "{{ my_vpc_result.vpc.id }}"
+        state: present
+      register: igw_result
+    - debug:
+        var: igw_result
+
+    - name: Set up public subnet route table
+      ec2_vpc_route_table:
+        aws_access_key: "{{ AWS_ACCESS_KEY_ID }}"
+        aws_secret_key: "{{ AWS_SECRET_ACCESS_KEY }}"
+        region: "{{ AWS_REGION }}"
+        vpc_id: "{{ my_vpc_result.vpc.id }}"
+        tags:
+          Name: Public
+        subnets:
+          - "{{ subnet_1a_result.subnet.id }}"
+          - "{{ subnet_1b_result.subnet.id }}"
+        routes:
+          - dest: 0.0.0.0/0
+            gateway_id: "{{ igw_result.gateway_id }}"
+      register: public_route_table_result
+    - debug:
+        var: public_route_table_result
+
+    - name: Create security group rule descriptions
+      ec2_group:
+        name: my_sg
+        description: sg with rule descriptions
+        vpc_id: "{{ my_vpc_result.vpc.id }}"
+        aws_access_key: "{{ AWS_ACCESS_KEY_ID }}"
+        aws_secret_key: "{{ AWS_SECRET_ACCESS_KEY }}"
+        region: "{{ AWS_REGION }}"
+        rules:
+          - proto: tcp
+            ports:
+            - 80
+            cidr_ip: 0.0.0.0/0
+            rule_desc: allow all on port 80
+          - proto: tcp
+            from_port: 22
+            to_port: 22
+            cidr_ip: 0.0.0.0/0
+          - proto: tcp
+            from_port: 443
+            to_port: 443
+            cidr_ip: 0.0.0.0/0
+          - proto: icmp
+            from_port: 8
+            to_port:  -1            
+            cidr_ip: 0.0.0.0/0
+      register: my_sg_result
+    - debug:
+        var: my_sg_result
+
+    - name: create launch config
+      ec2_lc:
+        name: my_new_lc
+        aws_access_key: "{{ AWS_ACCESS_KEY_ID }}"
+        aws_secret_key: "{{ AWS_SECRET_ACCESS_KEY }}"
+        region: "{{ AWS_REGION }}"        
+        image_id: "{{ image }}"
+        user_data: "{{ lookup('file','userdata') }}"
+        key_name: my_keypair
+        security_groups: "{{ my_sg_result.group_name }}"
+        instance_type: "{{ instance_type }}"
+        assign_public_ip: yes
+      register: my_new_lc_result
+    - debug:
+        var: my_new_lc_result
+
+    - ec2_asg:
+        name: myasg
+        aws_access_key: "{{ AWS_ACCESS_KEY_ID }}"
+        aws_secret_key: "{{ AWS_SECRET_ACCESS_KEY }}"
+        region: "{{ AWS_REGION }}"
+        availability_zones: [ "{{ subnet_1a_result.subnet.availability_zone }}", "{{subnet_1b_result.subnet.availability_zone }}" ]
+        launch_config_name: 'my_new_lc'
+        min_size: 2
+        max_size: 10
+        desired_capacity: 2
+        vpc_zone_identifier: [ "{{ subnet_1a_result.subnet.id }}", "{{subnet_1b_result.subnet.id }}" ]
+        tags:
+          - environment: production
+            propagate_at_launch: no
+      register: myasg_result
+    - debug:
+        var: myasg_result

@@ -1,0 +1,20 @@
+- name: Create a sandbox instance
+  hosts: localhost
+  gather_facts: no
+  vars_files:
+    - config.yml
+  tasks:
+    - name: Launch instance
+      ec2:
+         aws_access_key: "{{ AWS_ACCESS_KEY_ID }}"
+         aws_secret_key: "{{ AWS_SECRET_ACCESS_KEY }}"
+         keypair: my_keypair
+         group: default
+         instance_type: t2.micro
+         image: ami-002cc39e7bf021a77
+         wait: true
+         ec2_region: "{{ AWS_REGION }}"
+         count: 1
+         vpc_subnet_id: subnet-0e829a3763a69ee67
+         assign_public_ip: yes
+      register: ec2
