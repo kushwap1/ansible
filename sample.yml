@@ -1,0 +1,12 @@
+- hosts: localhost
+  gather_facts: False
+  vars_files:
+    - config.yml
+  tasks:
+    - ec2_instance_info:
+        aws_access_key: "{{ AWS_ACCESS_KEY_ID }}"
+        aws_secret_key: "{{ AWS_SECRET_ACCESS_KEY }}"
+        region: "{{ AWS_REGION }}"
+      register: ec2_instance_result
+    - debug:
+        msg: "{{ ec2_instance_result.instances[0].network_interfaces[0].association.public_ip }}" and "{{ ec2_instance_result.instances[1].network_interfaces[1].association.public_ip }}"
